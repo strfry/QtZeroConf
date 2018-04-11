@@ -92,7 +92,7 @@ public:
 
 		switch (event) {
 		case AVAHI_BROWSER_FAILURE:
-			ref->broswerCleanUp();
+			ref->browserCleanUp();
 			emit ref->pub->error(QZeroConf::browserFailed);
 			break;
 		case AVAHI_BROWSER_NEW:
@@ -134,33 +134,35 @@ public:
 	    AVAHI_GCC_UNUSED void* userdata)
 	{
 		bool newRecord = 0;
-		QZeroConfService zcs;
 		QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
 
 		QString key = name + QString::number(interface);
 		if (event == AVAHI_RESOLVER_FOUND) {
-			if (ref->pub->services.contains(key))
-				zcs = ref->pub->services[key];
-			else {
+			if (!ref->pub->services.contains(key)) {
 				newRecord = 1;
-				zcs.setName(name);
-				zcs.setType(type);
-				zcs.setDomain(domain);
-				zcs.setHost(host_name);
-				zcs.setInterfaceIndex(interface);
-				zcs.setPort(port);
-				while (txt)	// get txt records
-				{
-					QByteArray avahiText((const char *)txt->text, txt->size);
-					QList<QByteArray> pair = avahiText.split('=');
-					if (pair.size() == 2)
-						zcs.appendTxt(pair.at(0), pair.at(1));
-					else
-						zcs.appendTxt(pair.at(0));
-					txt = txt->next;
-				}
-				ref->pub->services.insert(key, zcs);
 			}
+
+			QZeroConfService& zcs  = ref->pub->services[key];
+
+			zcs.setName(name);
+			zcs.setType(type);
+			zcs.setDomain(domain);
+			zcs.setHost(host_name);
+			zcs.setInterfaceIndex(interface);
+			zcs.setPort(port);
+
+			QMap<QByteArray, QByteArray> txt_map;
+			while (txt)	// get txt records
+			{
+				QByteArray avahiText((const char *)txt->text, txt->size);
+				QList<QByteArray> pair = avahiText.split('=');
+				if (pair.size() == 2)
+					txt_map[pair.at(0)] = pair.at(1);
+				else
+					txt_map[pair.at(0)] = "";
+				txt = txt->next;
+			}
+			zcs.setTxt(txt_map);
 
 			char a[AVAHI_ADDRESS_STR_MAX];
 			avahi_address_snprint(a, sizeof(a), address);
@@ -176,14 +178,14 @@ public:
 				emit ref->pub->serviceUpdated(zcs);
 		}
 		else if (ref->pub->services.contains(key)) {	// delete service if exists and unable to resolve
-			zcs = ref->pub->services[key];
+			QZeroConfService zcs = ref->pub->services[key];
 			ref->pub->services.remove(key);
 			emit ref->pub->serviceRemoved(zcs);
 			// don't delete the resolver here...we need to keep it around so Avahi will keep updating....might be able to resolve the service in the future
 		}
 	}
 
-	void broswerCleanUp(void)
+	void browserCleanUp(void)
 	{
 		if (!browser)
 			return;
@@ -208,9 +210,9 @@ public:
 	AvahiEntryGroup *group;
 	AvahiServiceBrowser *browser;
 	QMap <QString, AvahiServiceResolver *> resolvers;
-	AvahiStringList *txt;
 	QString name, type, domain;
-	quint16 port;
+	uint16_t port;
+	AvahiStringList *txt;
 };
 
 
@@ -223,7 +225,7 @@ QZeroConf::QZeroConf(QObject *parent) : QObject (parent)
 QZeroConf::~QZeroConf()
 {
 	avahi_string_list_free(pri->txt);
-	pri->broswerCleanUp();
+	pri->browserCleanUp();
 	if (pri->client)
 		avahi_client_free(pri->client);
 	delete pri;
@@ -245,8 +247,7 @@ void QZeroConf::startServicePublish(const char *name, const char *type, const ch
 
 	int ret = avahi_entry_group_add_service_strlst(pri->group,
 		AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, AVAHI_PUBLISH_UPDATE,
-		pri->name.toUtf8(), pri->type.toUtf8(), pri->domain.toUtf8(),
-		NULL, pri->port, pri->txt);
+		name, type, domain, NULL, port, pri->txt);
 
 	if (ret < 0) {
 		avahi_entry_group_free(pri->group);
@@ -302,6 +303,17 @@ void QZeroConf::clearServiceTxtRecords()
 	pri->txt = NULL;
 }
 
+void QZeroConf::updateServiceTxtRecords()
+{
+	if (!publishExists()) return;
+	int err = avahi_entry_group_update_service_txt_strlst(pri->group,
+		AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0,
+		pri->name.toUtf8(), pri->type.toUtf8(), pri->domain.toUtf8(),
+		pri->txt);
+
+	if (err) emit error(QZeroConf::serviceRegistrationFailed);
+}
+
 void QZeroConf::startBrowser(QString type, QAbstractSocket::NetworkLayerProtocol protocol)
 {
  	AvahiProtocol	avahiProtocol;
@@ -323,7 +335,7 @@ void QZeroConf::startBrowser(QString type, QAbstractSocket::NetworkLayerProtocol
 
 void QZeroConf::stopBrowser(void)
 {
-	pri->broswerCleanUp();
+	pri->browserCleanUp();
 }
 
 bool QZeroConf::browserExists(void)

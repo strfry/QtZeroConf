@@ -63,6 +63,7 @@ public:
 	void addServiceTxtRecord(QString nameOnly);
 	void addServiceTxtRecord(QString name, QString value);
 	void clearServiceTxtRecords();
+	void updateServiceTxtRecords();
 
 Q_SIGNALS:
 	void servicePublished(void);
